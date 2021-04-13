@@ -11,26 +11,29 @@ module Caffeinate
 
     def call(&block)
       return true unless block
-
-      instance_eval(&block)
+      catch(:abort) do
+        result = instance_eval(&block)
+        return result.nil? || result === true
+      end
+      false
     end
 
     # Ends the CampaignSubscription
-    def end!
-      mailing.caffeinate_campaign_subscription.end!
-      false
+    def end!(*args)
+      mailing.caffeinate_campaign_subscription.end!(*args)
+      throw(:abort)
     end
 
     # Unsubscribes the CampaignSubscription
-    def unsubscribe!
-      mailing.caffeinate_campaign_subscription.unsubscribe!
-      false
+    def unsubscribe!(*args)
+      mailing.caffeinate_campaign_subscription.unsubscribe!(*args)
+      throw(:abort)
     end
 
     # Skips the mailing
     def skip!
       mailing.skip!
-      false
+      throw(:abort)
     end
   end
 end

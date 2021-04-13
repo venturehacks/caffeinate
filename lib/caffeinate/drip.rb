@@ -1,6 +1,8 @@
 # frozen_string_literal: true
 
 require 'caffeinate/drip_evaluator'
+require 'caffeinate/schedule_evaluator'
+
 module Caffeinate
   # A Drip object
   #
@@ -21,33 +23,22 @@ module Caffeinate
     end
 
     def send_at(mailing = nil)
-      if periodical?
-        start = mailing.instance_exec(&options[:start])
-        start += options[:every] if mailing.caffeinate_campaign_subscription.caffeinate_mailings.count.positive?
-        date = start.from_now
-      elsif options[:on]
-        date = mailing.instance_exec(&options[:on])
-      else
-        date = options[:delay].from_now
-      end
-
-      if options[:at]
-        time = Time.parse(options[:at])
-        return date.change(hour: time.hour, min: time.min, sec: time.sec)
-      end
-
-      date
-    end
-
-    def periodical?
-      options[:every].present?
+      ::Caffeinate::ScheduleEvaluator.call(self, mailing)
     end
 
     # Checks if the drip is enabled
+    #
+    # This is kind of messy and could use some love.
+    # todo: better.
     def enabled?(mailing)
-      dripper.run_callbacks(:before_drip, self, mailing)
-
-      DripEvaluator.new(mailing).call(&@block)
+      catch(:abort) do
+        if dripper.run_callbacks(:before_drip, self, mailing)
+          return DripEvaluator.new(mailing).call(&@block)
+        else
+          return false
+        end
+      end
+      false
     end
   end
 end

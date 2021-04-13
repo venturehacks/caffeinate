@@ -24,11 +24,13 @@ module Caffeinate
     has_one :caffeinate_campaign, through: :caffeinate_campaign_subscription
     alias_attribute :campaign, :caffeinate_campaign
 
-    scope :upcoming, -> { unsent.unskipped.where('send_at < ?', ::Caffeinate.config.time_now).order('send_at asc') }
+    scope :upcoming, -> { joins(:caffeinate_campaign_subscription).where(caffeinate_campaign_subscription: ::Caffeinate::CampaignSubscription.active).unsent.unskipped.where('send_at < ?', ::Caffeinate.config.time_now).order('send_at asc') }
     scope :unsent, -> { unskipped.where(sent_at: nil) }
     scope :sent, -> { unskipped.where.not(sent_at: nil) }
     scope :skipped, -> { where.not(skipped_at: nil) }
     scope :unskipped, -> { where(skipped_at: nil) }
+
+    after_touch :end_if_no_mailings!
 
     def initialize_dup(args)
       super
@@ -110,7 +112,7 @@ module Caffeinate
 
     # Delivers the Mailing in the background
     def deliver_later!
-      klass = ::Caffeinate.config.mailing_job_class
+      klass = ::Caffeinate.config.async_delivery_class
       if klass.respond_to?(:perform_later)
         klass.perform_later(id)
       elsif klass.respond_to?(:perform_async)
@@ -118,6 +120,10 @@ module Caffeinate
       else
         raise NoMethodError, "Neither perform_later or perform_async are defined on #{klass}."
       end
+    end
+
+    def end_if_no_mailings!
+      end! if future_mailings.empty?
     end
   end
 end

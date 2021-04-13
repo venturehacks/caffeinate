@@ -2,15 +2,24 @@
   <img width="450" src="https://github.com/joshmn/caffeinate/raw/master/logo.png" alt="Caffeinate logo" />
 </div>
 
----
+<div align="center">
+    <a href="https://codecov.io/gh/joshmn/caffeinate">
+        <img src="https://codecov.io/gh/joshmn/caffeinate/branch/master/graph/badge.svg?token=5LCOB4ESHL" alt="Coverage"/>
+    </a>
+    <a href="https://codeclimate.com/github/joshmn/caffeinate/maintainability">
+        <img src="https://api.codeclimate.com/v1/badges/9c075416ce74985d5c6c/maintainability" alt="Maintainability"/>
+    </a>
+     <a href="https://inch-ci.org/github/joshmn/caffeinate">
+        <img src="https://inch-ci.org/github/joshmn/caffeinate.svg?branch=master" alt="Docs"/>
+    </a>
+</div>
 
 # Caffeinate
 
-Caffeinate is a drip campaign engine for Ruby on Rails applications.
 
-Caffeinate tries to make creating and managing timed and scheduled email sequences fun. It works alongside ActionMailer
-and has everything you need to get started and to successfully manage campaigns. It's only dependency is the stack you're
-already familiar with: Ruby on Rails.
+Caffeinate is a drip email engine for managing, creating, and sending scheduled email sequences from your Ruby on Rails application.
+
+Caffeinate provides a simple DSL to create scheduled email sequences which can be used by ActionMailer without any additional configuration. 
 
 There's a cool demo with all the things included at [caffeinate.email](https://caffeinate.email). You can view the [marketing site source code here](https://github.com/joshmn/caffeinate-marketing).
 
@@ -30,19 +39,16 @@ end
 
 ```ruby
 class OnboardingMailer < ActionMailer::Base
-  # Send on account creation
   def welcome_to_my_cool_app(user)
     mail(to: user.email, subject: "Welcome to CoolApp!")
   end
 
-  # Send 2 days after the user signs up
   def some_cool_tips(user)
     return if user.unsubscribed_from_onboarding_campaign?
 
     mail(to: user.email, subject: "Here are some cool tips for MyCoolApp")
   end
 
-  # Sends 3 days after the user signs up and hasn't added a company profile yet
   def help_getting_started(user)
     return if user.unsubscribed_from_onboarding_campaign?
     return if user.onboarding_completed?
@@ -56,22 +62,12 @@ end
 
 * You're checking state in a mailer
 * The unsubscribe feature is, most likely, tied to a `User`, which means...
-* It's going to be _so fun_ to scale horizontally
+* It's going to be _so fun_ to scale when you finally want to add more unsubscribe links for different types of sequences
+    - "one of your projects has expired", but which one? Then you have to add a column to `projects` and manage all that state... ew
 
-## Caffeinate to the rescue
+## Do this all better in five minutes
 
-Caffeinate combines a simple scheduling DSL, ActionMailer, and your data models to create scheduled email sequences.
-
-What can you do with drip campaigns?
-* Onboard new customers with cool tips and tricks
-* Remind customers to use your product
-* Nag customers about using your product
-* Reach their spam folder after you fail to handle their unsubscribe request
-* And more!
-
-## Onboarding in Caffeinate
-
-In five minutes you can implement this onboarding campaign, and it won't even hijack your entire app!
+In five minutes you can implement this onboarding campaign:
 
 ### Install it
 
@@ -83,11 +79,11 @@ $ rails g caffeinate:install
 $ rake db:migrate
 ```
 
-### Remove that ActionMailer logic
+### Clean up the mailer logic
 
-Just delete it. Mailers should be responsible for receiving context and creating a `mail` object. Nothing more.
+Mailers should be responsible for receiving context and creating a `mail` object. Nothing more.
 
-The only other change you need to make is the argument that the mailer action receives:
+The only other change you need to make is the argument that the mailer action receives. It will now receive a `Caffeinate::Mailing`. [Learn more about the data models](docs/2-data-models.md):
 
 ```ruby
 class OnboardingMailer < ActionMailer::Base
@@ -108,27 +104,36 @@ class OnboardingMailer < ActionMailer::Base
 end
 ```
 
-While we're there, let's add an unsubscribe link to the views or layout:
-
-```erb
-<%= link_to "Stop receiving onboarding tips :(", caffeinate_unsubscribe_url %>
-```
-
 ### Create a Dripper
 
-A Dripper has all the logic for your Campaign and coordinates with ActionMailer on what to send.
+A Dripper has all the logic for your sequence and coordinates with ActionMailer on what to send.
 
 In `app/drippers/onboarding_dripper.rb`:
 
 ```ruby
 class OnboardingDripper < ApplicationDripper
+  # each sequence is a campaign. This will dynamically create one by the given slug
+  self.campaign = :onboarding 
+  
+  # gets called before every time we process a drip
+  before_drip do |_drip, mailing| 
+    if mailing.subscription.subscriber.onboarding_completed?
+      mailing.subscription.unsubscribe!("Completed onboarding")
+      throw(:abort)
+    end 
+  end
+  
+  # map drips to the mailer
   drip :welcome_to_my_cool_app, mailer: 'OnboardingMailer', delay: 0.hours
   drip :some_cool_tips, mailer: 'OnboardingMailer', delay: 2.days
   drip :help_getting_started, mailer: 'OnboardingMailer', delay: 3.days
 end
 ```
 
-The `drip` syntax is `def drip(mailer_action, options = {})`.
+We want to skip sending the `mailing` if the `subscriber` (`User`) completed onboarding. Let's unsubscribe 
+with `#unsubscribe!` and give it an optional reason of `Completed onboarding` so we can reference it later 
+when we look at analytics. `throw(:abort)` halts the callback chain just like regular Rails callbacks, stopping the 
+mailing from being sent.
 
 ### Add a subscriber to the Campaign
 
@@ -138,48 +143,37 @@ a `Caffeinate::CampaignSubscription`.
 ```ruby
 class User < ApplicationRecord
   after_commit on: :create do
-    OnboardingDripper.subscribe(self)
-  end
-
-  after_commit on: :update do
-    if onboarding_completed? && onboarding_completed_changed?
-      if OnboardingDripper.subscribed?(self)
-        OnboardingDripper.unsubscribe(self)
-      end
-    end
+    OnboardingDripper.subscribe!(self)
   end
 end
 ```
 
-When a `Caffeinate::CampaignSubscription` is created, the relevant Dripper is parsed and `Caffeinate::Mailing` records
-are created from the `drip` DSL. A `Caffeinate::Mailing` record has a `send_at` attribute which tells Caffeinate when we
-can send the mail, which we get from `Caffeiate::Mailing#mailer_class` and `Caffeinate::Mailing#mailer_action`.
-
 ### Run the Dripper
-
-Running `OnboardingDripper.perform!` every `x` minutes will call `Caffeinate::Mailing#process!` on `Caffeinate::Mailing`
-records that have `send_at < Time.now`.
 
 ```ruby
 OnboardingDripper.perform!
 ```
 
-### Done. But wait, there's more fun if you want
+### Done
 
-* Automatic subscriptions
-* Campaign-specific unsubscribe links
-* Reasons for unsubscribing so you can have some sort of analytics
-* Periodical emails (daily, weekly, monthly digests, anyone?)
-* Parameterized mailer support a la `OnboardingMailer.with(mailing: mailing)`
+You're done. 
 
-### Done. But wait, there's more fun if you want
+[Check out the docs](/docs/README.md) for a more in-depth guide that includes all the options you can use for more complex setups,
+tips, tricks, and shortcuts.
 
-* Automatic subscriptions
-* Campaign-specific unsubscribe links
-* Reasons for unsubscribing so you can have some sort of analytics
-* Periodical emails (daily, weekly, monthly digests, anyone?)
-* Parameterized mailer support a la `OnboardingMailer.with(mailing: mailing)`
+## But wait, there's more
 
+Caffeinate also...
+
+* ✅ Allows hyper-precise scheduled times. 9:19AM _in the user's timezone_? Sure! **Only on business days**? YES! 
+* ✅ Periodicals
+* ✅ Manages unsubscribes
+* ✅ Works with singular and multiple associations
+* ✅ Compatible with every background processor
+* ✅ Tested against large databases at AngelList and is performant as hell
+* ✅ Effortlessly handles complex workflows
+    - Need to skip a certain mailing? You can!
+ 
 ## Documentation
 
 * [Getting started, tips and tricks](https://github.com/joshmn/caffeinate/blob/master/docs/README.md)
@@ -191,7 +185,7 @@ OnboardingDripper.perform!
 
 ## Alternatives
 
-Not a fan? There are some alternatives!
+Not a fan of Caffeinate? I built it because I wasn't a fan of the alternatives. To each their own:
 
 * https://github.com/honeybadger-io/heya
 * https://github.com/tarr11/dripper
@@ -199,11 +193,14 @@ Not a fan? There are some alternatives!
 
 ## Contributing
 
-Just do it.
+There's so much more that can be done with this. I'd love to see what you're thinking.
+
+If you have general feedback, I'd love to know what you're using Caffeinate for! Please email me (any-thing [at] josh.mn) or [tweet me @joshmn](https://twitter.com/joshmn) or create an issue! I'd love to chat.
 
 ## Contributors & thanks
 
 * Thanks to [sourdoughdev](https://github.com/sourdoughdev/caffeinate) for releasing the gem name to me. :)
+* Thanks to [markokajzer](https://github.com/markokajzer) for listening to me talk about this most mornings.
 
 ## License
 

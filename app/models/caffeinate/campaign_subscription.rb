@@ -28,9 +28,13 @@ module Caffeinate
 
     has_many :caffeinate_mailings, class_name: 'Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id, dependent: :destroy
     has_many :mailings, class_name: 'Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id, dependent: :destroy
+    has_many :future_mailings, -> { upcoming.unsent }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
 
-    has_one :next_caffeinate_mailing, -> { upcoming.unsent.order(send_at: :asc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
-    has_one :next_mailing, -> { upcoming.unsent.order(send_at: :asc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
+    has_one :next_caffeinate_mailing, -> { joins(:caffeinate_campaign_subscription).where(caffeinate_campaign_subscriptions: { ended_at: nil, unsubscribed_at: nil }).upcoming.unsent.order(send_at: :asc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
+    has_one :next_mailing, -> { joins(:caffeinate_campaign_subscription).where(caffeinate_campaign_subscriptions: { ended_at: nil, unsubscribed_at: nil }).upcoming.unsent.order(send_at: :asc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
+
+    has_one :previous_caffeinate_mailing, -> { sent.order(sent_at: :desc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
+    has_one :previous_mailing, -> { sent.order(sent_at: :desc) }, class_name: '::Caffeinate::Mailing', foreign_key: :caffeinate_campaign_subscription_id
 
     belongs_to :caffeinate_campaign, class_name: 'Caffeinate::Campaign', foreign_key: :caffeinate_campaign_id
     alias_attribute :campaign, :caffeinate_campaign
@@ -48,6 +52,8 @@ module Caffeinate
 
     before_validation :set_token!, on: [:create]
     validates :token, uniqueness: true, on: [:create]
+
+    before_validation :call_dripper_before_subscribe_blocks!, on: :create
 
     after_commit :create_mailings!, on: :create
 
@@ -74,7 +80,7 @@ module Caffeinate
     end
 
     # Updates `ended_at` and runs `on_complete` callbacks
-    def end!(reason = nil)
+    def end!(reason = ::Caffeinate.config.default_ended_reason)
       raise ::Caffeinate::InvalidState, 'CampaignSubscription is already unsubscribed.' if unsubscribed?
 
       update!(ended_at: ::Caffeinate.config.time_now, ended_reason: reason)
@@ -83,14 +89,34 @@ module Caffeinate
       true
     end
 
+    # Updates `ended_at` and runs `on_complete` callbacks
+    def end(reason = ::Caffeinate.config.default_ended_reason)
+      return false if unsubscribed?
+
+      result = update(ended_at: ::Caffeinate.config.time_now, ended_reason: reason)
+
+      caffeinate_campaign.to_dripper.run_callbacks(:on_end, self)
+      result
+    end
+
     # Updates `unsubscribed_at` and runs `on_subscribe` callbacks
-    def unsubscribe!(reason = nil)
+    def unsubscribe!(reason = ::Caffeinate.config.default_unsubscribe_reason)
       raise ::Caffeinate::InvalidState, 'CampaignSubscription is already ended.' if ended?
 
       update!(unsubscribed_at: ::Caffeinate.config.time_now, unsubscribe_reason: reason)
 
       caffeinate_campaign.to_dripper.run_callbacks(:on_unsubscribe, self)
       true
+    end
+
+    # Updates `unsubscribed_at` and runs `on_subscribe` callbacks
+    def unsubscribe(reason = ::Caffeinate.config.default_unsubscribe_reason)
+      return false if ended?
+
+      result = update(unsubscribed_at: ::Caffeinate.config.time_now, unsubscribe_reason: reason)
+
+      caffeinate_campaign.to_dripper.run_callbacks(:on_unsubscribe, self)
+      result
     end
 
     # Updates `unsubscribed_at` to nil and runs `on_subscribe` callbacks.
@@ -105,11 +131,27 @@ module Caffeinate
       true
     end
 
+    # Updates `unsubscribed_at` to nil and runs `on_subscribe` callbacks.
+    # Use `force` to forcefully reset. Does not create the mailings.
+    def resubscribe!(force = false)
+      return false if ended? && !force
+      return false if unsubscribed? && !force
+
+      result = update(unsubscribed_at: nil, resubscribed_at: ::Caffeinate.config.time_now)
+
+      caffeinate_campaign.to_dripper.run_callbacks(:on_resubscribe, self)
+      result
+    end
+
     def completed?
       caffeinate_mailings.unsent.count.zero?
     end
 
     private
+
+    def call_dripper_before_subscribe_blocks!
+      caffeinate_campaign.to_dripper.run_callbacks(:before_subscribe, self)
+    end
 
     def on_complete
       caffeinate_campaign.to_dripper.run_callbacks(:on_complete, self)

@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.authors     = ['Josh Brody']
   spec.email       = ['josh@josh.mn']
   spec.homepage    = 'https://github.com/joshmn/caffeinate'
-  spec.summary     = 'Ruby on Rails drip campaign engine. Buzzwords!'
+  spec.summary     = 'Create, manage, and send scheduled email sequences and drip campaigns from your Rails app.'
   spec.description = spec.summary
   spec.license     = 'MIT'
 
@@ -27,4 +27,5 @@ Gem::Specification.new do |spec|
   spec.add_development_dependency 'simplecov'
   spec.add_development_dependency 'sqlite3'
   spec.add_development_dependency 'timecop'
+  spec.add_development_dependency 'codecov'
 end

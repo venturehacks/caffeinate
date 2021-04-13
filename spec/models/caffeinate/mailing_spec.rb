@@ -55,7 +55,7 @@ describe ::Caffeinate::Mailing do
         class MyJob < ActiveJob::Base
           include ::Caffeinate::DeliverAsync
         end
-        Caffeinate.config.mailing_job = 'MyJob'
+        Caffeinate.config.async_delivery_class = 'MyJob'
         Caffeinate.config.async_delivery = true
         mailing = sent_mailings.first.dup
         mailing.mailer_action = 'test'
@@ -66,7 +66,7 @@ describe ::Caffeinate::Mailing do
         end.to change {
           ActiveJob::Base.queue_adapter.enqueued_jobs.count
         }.by 1
-        Caffeinate.config.mailing_job = nil
+        Caffeinate.config.async_delivery_class = nil
         Caffeinate.config.async_delivery = false
       end
     end
@@ -142,6 +142,17 @@ describe ::Caffeinate::Mailing do
     describe '#subscriber' do
       it 'delegates to caffeinate_campaign_subscription' do
         expect(mailing.subscriber).to eq(mailing.caffeinate_campaign_subscription.subscriber)
+      end
+    end
+  end
+
+  context 'scopes' do
+    describe '.upcoming' do
+      it 'is only active subscriptions' do
+        Timecop.freeze do
+          sql = ::Caffeinate::Mailing.upcoming.to_sql
+          expect(sql).to include(Caffeinate::CampaignSubscription.active.select(:id).to_sql)
+        end
       end
     end
   end

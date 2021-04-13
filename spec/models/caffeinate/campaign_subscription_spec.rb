@@ -6,6 +6,25 @@ describe Caffeinate::CampaignSubscription do
   let(:campaign) { create(:caffeinate_campaign, :with_dripper) }
   let(:subscription) { create(:caffeinate_campaign_subscription, caffeinate_campaign: campaign) }
 
+  describe '#next_mailing' do
+    it 'has a mailing if the campaign is active' do
+      mailing = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.ago)
+      mailing_2 = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.from_now)
+      expect(subscription.next_mailing).to eq(mailing)
+    end
+    it 'does not have a next_mailing if the campaign is ended' do
+      mailing = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.ago)
+      mailing_2 = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.from_now)
+      subscription.end!
+      expect(subscription.next_mailing).to be_nil
+    end
+    it 'does not have a next_mailing if the campaign is unsubscribed' do
+      mailing = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.ago)
+      mailing_2 = subscription.mailings.create!(mailer_class: "Test", mailer_action: "test", send_at: 1.hour.from_now)
+      subscription.unsubscribe!
+      expect(subscription.next_mailing).to be_nil
+    end
+  end
   describe '#end!' do
     context 'without argument' do
       it 'is not ended' do
@@ -121,6 +140,26 @@ describe Caffeinate::CampaignSubscription do
       subscription.unsubscribed_at = Time.current
       subscription.resubscribed_at = Time.current
       expect(subscription).not_to be_subscribed
+    end
+  end
+
+  describe '#validations' do
+    before do
+      campaign.to_dripper.before_subscribe do |campaign_subscription|
+        campaign_subscription.errors.add(:base, "is invalid")
+        throw(:abort)
+      end
+    end
+
+    after do
+      campaign.to_dripper.instance_variable_set(:@before_subscribe_blocks, [])
+    end
+
+    it 'calls before_subscribe blocks and invalidates accordingly' do
+      user = create(:user)
+      expect {
+        subscription = campaign.to_dripper.subscribe(user)
+      }.to raise_error(ActiveRecord::RecordInvalid)
     end
   end
 end
