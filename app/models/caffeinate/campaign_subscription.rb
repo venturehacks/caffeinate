@@ -52,7 +52,7 @@ module Caffeinate
     scope :ended, -> { where.not(ended_at: nil) }
 
     before_validation :set_token!, on: [:create]
-    validates :token, uniqueness: true, on: [:create]
+    validates :token, uniqueness: { case_sensitive: true }, on: [:create]
 
     before_validation :call_dripper_before_subscribe_blocks!, on: :create
 
